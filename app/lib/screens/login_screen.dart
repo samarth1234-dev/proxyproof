@@ -1,39 +1,346 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../services/api_service.dart';
 
 class LoginScreen extends StatefulWidget {
+  const LoginScreen({Key? key}) : super(key: key);
+
   @override
   _LoginScreenState createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _userController = TextEditingController();
-  final _passController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _fullNameController = TextEditingController();
   final _api = ApiService();
 
-  void _handleLogin() async {
-    final res = await _api.login(_userController.text, _passController.text);
-    if (res.containsKey('token')) {
-      await _api.saveToken(res['token']);
-      Navigator.pushReplacementNamed(context, res['role'] == 'organiser' ? '/organiser' : '/student');
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Login Failed')));
+  bool _isRegistering = false;
+  bool _isLoading = false;
+  String _selectedRole = 'student';
+
+  @override
+  void initState() {
+    super.initState();
+    _checkExistingLogin();
+  }
+
+  void _checkExistingLogin() async {
+    final token = await _api.getToken();
+    final user = await _api.getCurrentUser();
+    if (token != null && user != null && mounted) {
+      final role = user['role'] ?? 'student';
+      Navigator.pushReplacementNamed(
+        context,
+        role == 'organiser' ? '/organiser' : '/student',
+      );
+    }
+  }
+
+  void _showSettingsDialog() async {
+    final currentUrl = await ApiService.getBaseUrl();
+    final urlController = TextEditingController(text: currentUrl);
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E30),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Server Configuration',
+          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Set your backend IP address (e.g., http://172.17.176.112:5050):',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: urlController,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: const Color(0xFF2A2A40),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                prefixIcon: const Icon(Icons.lan, color: Color(0xFF00D2FF)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await ApiService.setBaseUrl(urlController.text.trim());
+              if (mounted) {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Server URL set to: ${urlController.text.trim()}')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6C63FF)),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleSubmit() async {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
+    final fullName = _fullNameController.text.trim();
+
+    if (username.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter both username and password')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      if (_isRegistering) {
+        final res = await _api.register(
+          username: username,
+          password: password,
+          fullName: fullName.isEmpty ? username : fullName,
+          role: _selectedRole,
+        );
+
+        if (res.containsKey('error')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(backgroundColor: Colors.redAccent, content: Text(res['error'])),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(backgroundColor: Colors.green, content: Text('Account created! Please log in.')),
+          );
+          setState(() {
+            _isRegistering = false;
+          });
+        }
+      } else {
+        final res = await _api.login(username: username, password: password);
+        if (res.containsKey('error')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(backgroundColor: Colors.redAccent, content: Text(res['error'])),
+          );
+        } else if (res.containsKey('token')) {
+          final role = res['role'] ?? 'student';
+          Navigator.pushReplacementNamed(
+            context,
+            role == 'organiser' ? '/organiser' : '/student',
+          );
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('ProxyProof Login')),
-      body: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          children: [
-            TextField(controller: _userController, decoration: InputDecoration(labelText: 'Username')),
-            TextField(controller: _passController, decoration: InputDecoration(labelText: 'Password'), obscureText: true),
-            SizedBox(height: 20),
-            ElevatedButton(onPressed: _handleLogin, child: Text('Login')),
-          ],
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF131326), Color(0xFF0A0A14)],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.settings, color: Colors.white54),
+                        tooltip: 'Server Settings',
+                        onPressed: _showSettingsDialog,
+                      ),
+                    ],
+                  ),
+                  Container(
+                    width: 90,
+                    height: 90,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF6C63FF), Color(0xFF00D2FF)],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF6C63FF).withOpacity(0.4),
+                          blurRadius: 25,
+                          spreadRadius: 4,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.shield_outlined, size: 48, color: Colors.white),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'ProxyProof',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.poppins(
+                      fontSize: 34,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _isRegistering ? 'Register your verified account' : 'High-Security BLE Attendance System',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      color: Colors.white60,
+                    ),
+                  ),
+                  const SizedBox(height: 36),
+
+                  if (_isRegistering) ...[
+                    TextField(
+                      controller: _fullNameController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: 'Full Name',
+                        labelStyle: const TextStyle(color: Colors.white60),
+                        filled: true,
+                        fillColor: const Color(0xFF1E1E34),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                        prefixIcon: const Icon(Icons.badge, color: Color(0xFF00D2FF)),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
+                  TextField(
+                    controller: _usernameController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: _isRegistering && _selectedRole == 'student' ? 'Student ID / Roll No' : 'Username',
+                      labelStyle: const TextStyle(color: Colors.white60),
+                      filled: true,
+                      fillColor: const Color(0xFF1E1E34),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                      prefixIcon: const Icon(Icons.person, color: Color(0xFF6C63FF)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  TextField(
+                    controller: _passwordController,
+                    obscureText: true,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: 'Password',
+                      labelStyle: const TextStyle(color: Colors.white60),
+                      filled: true,
+                      fillColor: const Color(0xFF1E1E34),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                      prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFF6C63FF)),
+                    ),
+                  ),
+
+                  if (_isRegistering) ...[
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: _selectedRole,
+                      dropdownColor: const Color(0xFF1E1E34),
+                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                      decoration: InputDecoration(
+                        labelText: 'Select Role',
+                        labelStyle: const TextStyle(color: Colors.white60),
+                        filled: true,
+                        fillColor: const Color(0xFF1E1E34),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                        prefixIcon: const Icon(Icons.school, color: Color(0xFF00D2FF)),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'student', child: Text('Student (Attend sessions)')),
+                        DropdownMenuItem(value: 'organiser', child: Text('Organiser / Professor (Host sessions)')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) setState(() => _selectedRole = val);
+                      },
+                    ),
+                  ],
+
+                  const SizedBox(height: 28),
+
+                  ElevatedButton(
+                    onPressed: _isLoading ? null : _handleSubmit,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6C63FF),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      elevation: 6,
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                          )
+                        : Text(
+                            _isRegistering ? 'Create Verified Account' : 'Secure Login',
+                            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600),
+                          ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _isRegistering = !_isRegistering;
+                      });
+                    },
+                    child: Text(
+                      _isRegistering
+                          ? 'Already have an account? Sign In'
+                          : 'New student or organiser? Register here',
+                      style: GoogleFonts.poppins(color: const Color(0xFF00D2FF), fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
