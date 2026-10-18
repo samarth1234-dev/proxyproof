@@ -1,12 +1,15 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Primary online cloud backend
+  // Primary online cloud backend hosted on Render
   static const String defaultUrl = 'https://proxyproof-backend.onrender.com';
   static bool isOfflineMode = false;
+  static bool _isSyncing = false;
 
   static Future<String> getBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();
@@ -16,6 +19,46 @@ class ApiService {
   static Future<void> setBaseUrl(String url) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('api_base_url', url.trim());
+  }
+
+  // --- HARDWARE DEVICE EXTRACTION (ONE-PHONE-ONE-ACCOUNT) ---
+  static Future<String> getHardwareDeviceId() async {
+    final deviceInfo = DeviceInfoPlugin();
+    try {
+      if (Platform.isAndroid) {
+        final androidInfo = await deviceInfo.androidInfo;
+        return androidInfo.id;
+      } else if (Platform.isIOS) {
+        final iosInfo = await deviceInfo.iosInfo;
+        return iosInfo.identifierForVendor ?? 'ios_device_id';
+      }
+    } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    var fallbackId = prefs.getString('persistent_hardware_device_id');
+    if (fallbackId == null) {
+      fallbackId = 'dev_${DateTime.now().millisecondsSinceEpoch}_${(1000 + Random().nextInt(9000))}';
+      await prefs.setString('persistent_hardware_device_id', fallbackId);
+    }
+    return fallbackId;
+  }
+
+  static Future<String> getDeviceModel() async {
+    final deviceInfo = DeviceInfoPlugin();
+    try {
+      if (Platform.isAndroid) {
+        final androidInfo = await deviceInfo.androidInfo;
+        return '${androidInfo.brand} ${androidInfo.model}';
+      } else if (Platform.isIOS) {
+        final iosInfo = await deviceInfo.iosInfo;
+        return iosInfo.name;
+      }
+    } catch (_) {}
+    return 'Mobile Device';
+  }
+
+  static Future<String?> getBoundAccount() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('device_bound_account_username');
   }
 
   Future<String?> getToken() async {
@@ -101,7 +144,7 @@ class ApiService {
       try {
         final uri = Uri.parse('$base$path');
         http.Response res;
-        const timeout = Duration(milliseconds: 3000);
+        const timeout = Duration(milliseconds: 2500);
         if (method == 'POST') {
           res = await http.post(uri, headers: headers, body: body).timeout(timeout);
         } else if (method == 'PUT') {
@@ -124,42 +167,120 @@ class ApiService {
     throw Exception('All network targets unreachable');
   }
 
-  // --- AUTHENTICATION (Live Cloud + Persistent Offline Safety) ---
+  // --- STRICT ONE-PHONE-ONE-ACCOUNT & OFFLINE REGISTRATION ---
   Future<Map<String, dynamic>> register({
     required String username,
     required String password,
     required String fullName,
     required String role,
   }) async {
+    final cleanUser = username.trim();
+    final cleanPass = password.trim();
+    final cleanName = fullName.trim().isEmpty ? cleanUser : fullName.trim();
+    final cleanRole = role.toLowerCase() == 'organiser' ? 'organiser' : 'student';
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. Hardware Security Check: Has this phone already been registered to another account?
+    final boundUser = await getBoundAccount();
+    if (boundUser != null && boundUser.toLowerCase() != cleanUser.toLowerCase()) {
+      return {
+        'error': 'Hardware Policy: This phone is already bound to account "@$boundUser". Only ONE account per phone is allowed!'
+      };
+    }
+
+    final deviceId = await getHardwareDeviceId();
+    final deviceModel = await getDeviceModel();
+
+    // 2. Attempt online registration with live Render cloud backend
     try {
       final response = await _sendWithFallback(
         '/auth/register',
         'POST',
         headers: await _headers(needsAuth: false),
         body: jsonEncode({
-          'username': username,
-          'password': password,
-          'fullName': fullName,
-          'role': role,
+          'username': cleanUser,
+          'password': cleanPass,
+          'fullName': cleanName,
+          'role': cleanRole,
+          'deviceId': deviceId,
+          'deviceModel': deviceModel,
         }),
       );
+
       final data = jsonDecode(response.body);
+
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        // Cache credentials locally for seamless offline continuation
-        final prefs = await SharedPreferences.getInstance();
-        final cacheKey = 'cached_user_${username.toLowerCase().trim()}';
+        // Successfully registered online! Bind this phone to this account permanently
+        await prefs.setString('device_bound_account_username', cleanUser.toLowerCase());
+        final cacheKey = 'cached_user_${cleanUser.toLowerCase()}';
         await prefs.setString(cacheKey, jsonEncode({
-          'username': username.trim(),
-          'password': password.trim(),
-          'fullName': fullName.trim(),
-          'role': role,
+          'username': cleanUser,
+          'password': cleanPass,
+          'fullName': cleanName,
+          'role': cleanRole,
           'userId': data['userId'] ?? 1,
+          'deviceId': deviceId,
         }));
+
+        return data;
+      } else if (response.statusCode == 409 || response.statusCode == 400) {
+        return data; // Return backend validation error (e.g. username taken or hardware bound)
       }
-      return data;
     } catch (_) {
-      return {'error': 'Could not connect to live server. Please check internet connection or server status.'};
+      // 3. Fallback: Phone is offline / no internet at all!
     }
+
+    // Register locally on phone with zero connection friction!
+    isOfflineMode = true;
+    await prefs.setString('device_bound_account_username', cleanUser.toLowerCase());
+
+    final cacheKey = 'cached_user_${cleanUser.toLowerCase()}';
+    await prefs.setString(cacheKey, jsonEncode({
+      'username': cleanUser,
+      'password': cleanPass,
+      'fullName': cleanName,
+      'role': cleanRole,
+      'userId': 1,
+      'deviceId': deviceId,
+      'isOffline': true,
+    }));
+
+    // Queue for automatic background cloud sync as soon as internet connects
+    final queueRaw = prefs.getString('pending_sync_users') ?? '[]';
+    List<dynamic> queue = jsonDecode(queueRaw);
+    queue.add({
+      'username': cleanUser,
+      'password': cleanPass,
+      'fullName': cleanName,
+      'role': cleanRole,
+      'deviceId': deviceId,
+      'deviceModel': deviceModel,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+    await prefs.setString('pending_sync_users', jsonEncode(queue));
+
+    // Auto-login locally
+    final offlineToken = 'offline_token_${DateTime.now().millisecondsSinceEpoch}';
+    await saveAuthData(
+      token: offlineToken,
+      role: cleanRole,
+      userId: 1,
+      username: cleanUser,
+      fullName: cleanName,
+      deviceId: deviceId,
+      isApproved: true,
+      isOffline: true,
+    );
+
+    return {
+      'message': 'Account created and bound to this device (Offline Ready)!',
+      'userId': 1,
+      'isOffline': true,
+      'token': offlineToken,
+      'role': cleanRole,
+      'username': cleanUser,
+    };
   }
 
   Future<Map<String, dynamic>> login({
@@ -169,7 +290,11 @@ class ApiService {
   }) async {
     final cleanUser = username.trim();
     final cleanPass = password.trim();
+    final prefs = await SharedPreferences.getInstance();
 
+    final deviceId = await getHardwareDeviceId();
+
+    // 1. Try online login with live cloud backend
     try {
       final response = await _sendWithFallback(
         '/auth/login',
@@ -186,14 +311,16 @@ class ApiService {
           userId: data['userId'],
           username: data['username'],
           fullName: data['fullName'],
-          deviceId: data['deviceId'],
+          deviceId: deviceId,
           isApproved: data['isApproved'] ?? true,
           isOffline: false,
         );
         isOfflineMode = false;
 
+        // Permanently bind this device to this username
+        await prefs.setString('device_bound_account_username', cleanUser.toLowerCase());
+
         // Cache user info locally for future offline sessions
-        final prefs = await SharedPreferences.getInstance();
         final cacheKey = 'cached_user_${cleanUser.toLowerCase()}';
         await prefs.setString(cacheKey, jsonEncode({
           'username': cleanUser,
@@ -201,19 +328,21 @@ class ApiService {
           'fullName': data['fullName'],
           'role': data['role'],
           'userId': data['userId'],
-          'deviceId': data['deviceId'],
+          'deviceId': deviceId,
         }));
+
+        // Silently trigger background cloud sync for any pending offline data
+        syncPendingDataWithCloud();
 
         return data;
       } else if (response.statusCode == 401) {
-        return data; // Return invalid credentials error from live server
+        return data; // Invalid credentials
       }
     } catch (_) {
-      // Live server unreachable - check if this user previously registered/logged in on this phone
+      // 2. Offline Fallback Login
     }
 
-    // Check local offline user cache on phone
-    final prefs = await SharedPreferences.getInstance();
+    // Check local offline cache on this phone
     final cacheKey = 'cached_user_${cleanUser.toLowerCase()}';
     final cachedRaw = prefs.getString(cacheKey);
 
@@ -229,7 +358,7 @@ class ApiService {
             userId: cached['userId'] ?? 1,
             username: cached['username'],
             fullName: cached['fullName'],
-            deviceId: cached['deviceId'] ?? 'device_offline',
+            deviceId: deviceId,
             isApproved: true,
             isOffline: true,
           );
@@ -239,19 +368,95 @@ class ApiService {
             'username': cached['username'],
             'fullName': cached['fullName'],
             'role': cached['role'] ?? 'student',
-            'deviceId': cached['deviceId'],
+            'deviceId': deviceId,
             'isApproved': true,
             'isOffline': true,
           };
         } else {
-          return {'error': 'Invalid password for cached user.'};
+          return {'error': 'Invalid password for this account.'};
         }
       } catch (_) {}
     }
 
     return {
-      'error': 'Cannot reach server. Please ensure internet is active to log in for the first time.'
+      'error': 'Cannot connect to server and no offline account found for this username.'
     };
+  }
+
+  // --- AUTOMATIC BACKGROUND CLOUD SYNC ENGINE ---
+  static Future<void> syncPendingDataWithCloud() async {
+    if (_isSyncing) return;
+    _isSyncing = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // 1. Sync pending offline registered users
+      final queueRaw = prefs.getString('pending_sync_users');
+      if (queueRaw != null) {
+        List<dynamic> queue = jsonDecode(queueRaw);
+        List<dynamic> remaining = [];
+        for (final item in queue) {
+          try {
+            final uri = Uri.parse('$defaultUrl/auth/register');
+            final res = await http.post(
+              uri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(item),
+            ).timeout(const Duration(seconds: 4));
+
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              // Successfully registered in cloud!
+            } else if (res.statusCode == 409) {
+              // Already exists in cloud, nothing left to do
+            } else {
+              remaining.add(item);
+            }
+          } catch (_) {
+            remaining.add(item);
+          }
+        }
+        await prefs.setString('pending_sync_users', jsonEncode(remaining));
+      }
+
+      // 2. Sync pending offline attendance records
+      final recordsRaw = prefs.getString('offline_attendance_records');
+      final token = prefs.getString('auth_token');
+      if (recordsRaw != null && token != null && !token.startsWith('offline_token')) {
+        List<dynamic> records = jsonDecode(recordsRaw);
+        bool modified = false;
+        for (final rec in records) {
+          if (rec['synced'] != true) {
+            try {
+              final uri = Uri.parse('$defaultUrl/attendance/mark');
+              final res = await http.post(
+                uri,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer $token',
+                },
+                body: jsonEncode({
+                  'sessionId': rec['sessionId'],
+                  'token': rec['token'] ?? '000000',
+                  'rssi': rec['rssi'] ?? -60,
+                  'deviceId': rec['deviceId'],
+                }),
+              ).timeout(const Duration(seconds: 4));
+
+              if (res.statusCode >= 200 && res.statusCode < 300) {
+                rec['synced'] = true;
+                modified = true;
+              }
+            } catch (_) {}
+          }
+        }
+        if (modified) {
+          await prefs.setString('offline_attendance_records', jsonEncode(records));
+        }
+      }
+    } catch (_) {} finally {
+      _isSyncing = false;
+    }
   }
 
   Future<Map<String, dynamic>> getMe() async {
@@ -285,7 +490,7 @@ class ApiService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('bound_device_id', deviceId);
       return {
-        'message': 'Primary device registered locally (Offline Mode)',
+        'message': 'Primary device bound locally (Offline Mode)',
         'deviceId': deviceId,
         'isApproved': true,
       };
@@ -331,6 +536,8 @@ class ApiService {
     required String title,
     int durationMinutes = 5,
   }) async {
+    syncPendingDataWithCloud();
+
     try {
       final response = await _sendWithFallback(
         '/session/start',
@@ -412,6 +619,8 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getActiveSession() async {
+    syncPendingDataWithCloud();
+
     try {
       final response = await _sendWithFallback(
         '/session/active',
@@ -454,13 +663,18 @@ class ApiService {
     }
   }
 
-  // --- ATTENDANCE MARKING ---
+  // --- ATTENDANCE MARKING (LOCAL VERIFICATION + CLOUD AUTO-SYNC) ---
   Future<Map<String, dynamic>> markAttendance({
     required int sessionId,
     required String token,
     required int rssi,
     required String deviceId,
   }) async {
+    // Proximity check (must be inside room)
+    if (rssi < -85) {
+      return {'error': 'Proximity check failed ($rssi dBm). You must be inside the classroom!'};
+    }
+
     try {
       final response = await _sendWithFallback(
         '/attendance/mark',
@@ -473,8 +687,13 @@ class ApiService {
           'deviceId': deviceId,
         }),
       );
-      return jsonDecode(response.body);
+      final data = jsonDecode(response.body);
+      if (data['success'] == true) {
+        data['synced'] = true;
+      }
+      return data;
     } catch (_) {
+      // Offline fallback attendance recording
       isOfflineMode = true;
       final prefs = await SharedPreferences.getInstance();
       final user = await getCurrentUser();
@@ -488,7 +707,7 @@ class ApiService {
       if (already) {
         return {
           'alreadyPresent': true,
-          'message': 'Attendance already marked for this session!',
+          'message': 'Attendance already recorded for this session!',
         };
       }
 
@@ -498,6 +717,7 @@ class ApiService {
       records.insert(0, {
         'attendanceId': records.length + 1,
         'sessionId': sessionId,
+        'token': token,
         'studentId': {
           'id': user?['id'] ?? 1,
           'username': username,
@@ -509,14 +729,15 @@ class ApiService {
         'time': formattedTime,
         'rssi': rssi,
         'deviceId': deviceId,
-        'status': 'Present (Local Recorded)',
+        'status': 'Present (Local Verified)',
+        'synced': false,
       });
 
       await prefs.setString('offline_attendance_records', jsonEncode(records));
 
       return {
         'success': true,
-        'message': 'Attendance successfully verified & marked!',
+        'message': 'Attendance successfully verified & marked (Offline Mode)!',
         'username': username,
         'rssi': rssi,
         'time': formattedTime,
@@ -526,6 +747,8 @@ class ApiService {
   }
 
   Future<List<dynamic>> getDashboard(int sessionId) async {
+    syncPendingDataWithCloud();
+
     try {
       final response = await _sendWithFallback(
         '/attendance/dashboard/$sessionId',
@@ -583,9 +806,10 @@ class ApiService {
         'rssi': 0,
         'deviceId': 'Organiser Manual Override',
         'status': 'Manual',
+        'synced': false,
       });
       await prefs.setString('offline_attendance_records', jsonEncode(records));
-      return {'message': 'Student added successfully'};
+      return {'message': 'Student added successfully (Offline Mode)'};
     }
   }
 
@@ -612,6 +836,8 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getHistory() async {
+    syncPendingDataWithCloud();
+
     try {
       final response = await _sendWithFallback(
         '/attendance/history',

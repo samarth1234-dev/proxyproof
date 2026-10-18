@@ -125,7 +125,23 @@ class _LoginScreenState extends State<LoginScreen> {
 
         if (res.containsKey('error')) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(backgroundColor: Colors.redAccent, content: Text(res['error'])),
+            SnackBar(
+              backgroundColor: Colors.redAccent,
+              content: Text(res['error']),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        } else if (res.containsKey('token')) {
+          final role = res['role'] ?? _selectedRole;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.green,
+              content: Text(res['message'] ?? 'Account created and bound to this device!'),
+            ),
+          );
+          Navigator.pushReplacementNamed(
+            context,
+            role == 'organiser' ? '/organiser' : '/student',
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(

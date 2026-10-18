@@ -110,6 +110,9 @@ def register():
     fullName = data.get('fullName', username).strip()
     role = data.get('role', 'student').strip().lower()
 
+    deviceId = data.get('deviceId', '').strip()
+    deviceModel = data.get('deviceModel', 'Mobile Device').strip()
+
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
 
@@ -119,9 +122,14 @@ def register():
     hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
         with get_db() as conn:
+            if deviceId:
+                existing_device = conn.execute('SELECT username FROM users WHERE deviceId = ?', (deviceId,)).fetchone()
+                if existing_device and existing_device['username'].lower() != username.lower():
+                    return jsonify({'error': f"Hardware security violation: This phone is already bound to account '{existing_device['username']}'. Only 1 account per device is allowed!"}), 409
+
             cursor = conn.execute(
-                'INSERT INTO users (username, fullName, password, role, isApproved) VALUES (?, ?, ?, ?, 1)',
-                (username, fullName, hashed, role)
+                'INSERT INTO users (username, fullName, password, role, deviceId, deviceModel, isApproved) VALUES (?, ?, ?, ?, ?, ?, 1)',
+                (username, fullName, hashed, role, deviceId or None, deviceModel if deviceId else None)
             )
             conn.commit()
             return jsonify({'message': 'Account created successfully!', 'userId': cursor.lastrowid}), 201
@@ -129,6 +137,7 @@ def register():
         return jsonify({'error': 'Username already exists'}), 409
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/auth/login', methods=['POST'])
 def login():
@@ -179,6 +188,10 @@ def bind_device():
         return jsonify({'error': 'deviceId required'}), 400
 
     with get_db() as conn:
+        device_taken = conn.execute('SELECT username FROM users WHERE deviceId = ? AND id != ?', (device_id, curr['id'])).fetchone()
+        if device_taken:
+            return jsonify({'error': f"Hardware security violation: This phone is already bound to account '{device_taken['username']}'. Only 1 account per device is allowed!"}), 409
+
         existing = conn.execute('SELECT deviceId, isApproved FROM users WHERE id = ?', (curr['id'],)).fetchone()
         
         # If user has no device registered yet, auto-approve the first device!
