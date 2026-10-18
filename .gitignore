@@ -2,6 +2,11 @@
 node_modules/
 .npm/
 
+# Environment and Secrets
+.env
+.env.*
+*.env
+
 # Database files
 *.db
 *.db-journal
@@ -18,7 +23,9 @@ backend/proxyproof_node.json
 build/
 app/build/
 app/.dart_tool/
-*.apk
+
+# Documents & PDFs
+*.pdf
 
 # OS Generated
 .DS_Store
