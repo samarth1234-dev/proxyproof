@@ -18,6 +18,7 @@ backend/proxyproof_node.json
 build/
 app/build/
 app/.dart_tool/
+*.apk
 
 # OS Generated
 .DS_Store
