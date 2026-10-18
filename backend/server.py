@@ -604,8 +604,9 @@ def get_all_students():
         return jsonify([dict(s) for s in students])
 
 if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5050))
     print('=' * 60)
     print('  🛡️  PROXYPROOF HIGH-SECURITY ATTENDANCE SERVER')
-    print('  🚀  Running on 0.0.0.0:5050')
+    print(f'  🚀  Running on 0.0.0.0:{port}')
     print('=' * 60)
-    app.run(host='0.0.0.0', port=5050, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False)

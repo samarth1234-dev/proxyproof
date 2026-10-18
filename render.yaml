@@ -1,11 +1,11 @@
 services:
   - type: web
     name: proxyproof-backend
-    env: node
+    env: python
     plan: free
     rootDir: backend
-    buildCommand: npm install
-    startCommand: node server.js
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app
     envVars:
       - key: PORT
         value: 10000
