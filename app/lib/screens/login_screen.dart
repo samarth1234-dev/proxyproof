@@ -72,7 +72,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             const SizedBox(height: 12),
             const Text(
-              '⚡ Offline Standalone Mode is always active as a safety net. The app works anywhere even without network.',
+              '⚡ Once you register and log in, your account and device will stay active permanently on this device even without active internet.',
               style: TextStyle(color: Colors.white54, fontSize: 11),
             ),
           ],
@@ -100,38 +100,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  void _quickEnter(String role) async {
-    setState(() => _isLoading = true);
-    try {
-      final username = role == 'organiser' ? 'teacher' : 'samarth';
-      final res = await _api.login(
-        username: username,
-        password: 'password123',
-        preferredRole: role,
-      );
-      if (mounted) {
-        final isOff = res['isOffline'] == true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: isOff ? const Color(0xFF6C63FF) : Colors.green,
-            duration: const Duration(seconds: 2),
-            content: Text(
-              isOff
-                  ? '⚡ Entered in Standalone Offline Mode as ${role.toUpperCase()}'
-                  : '🌐 Connected to Cloud Backend as ${role.toUpperCase()}',
-            ),
-          ),
-        );
-        Navigator.pushReplacementNamed(
-          context,
-          role == 'organiser' ? '/organiser' : '/student',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
   void _handleSubmit() async {
     final username = _usernameController.text.trim();
     final password = _passwordController.text.trim();
@@ -139,7 +107,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (username.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter both username and password')),
+        const SnackBar(content: Text('Please enter username and password')),
       );
       return;
     }
@@ -176,25 +144,13 @@ class _LoginScreenState extends State<LoginScreen> {
           password: password,
           preferredRole: _selectedRole,
         );
-        if (res.containsKey('error') && res['error'].toString().contains('Invalid username')) {
+        if (res.containsKey('error')) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(backgroundColor: Colors.redAccent, content: Text(res['error'])),
           );
         } else if (res.containsKey('token') || res.containsKey('userId')) {
           final role = res['role'] ?? 'student';
-          final isOff = res['isOffline'] == true;
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                backgroundColor: isOff ? const Color(0xFF6C63FF) : Colors.green,
-                duration: const Duration(seconds: 2),
-                content: Text(
-                  isOff
-                      ? '⚡ Logged in (Standalone Offline Mode) - Ready!'
-                      : '🌐 Logged in (Cloud Online Mode)',
-                ),
-              ),
-            );
             Navigator.pushReplacementNamed(
               context,
               role == 'organiser' ? '/organiser' : '/student',
@@ -251,7 +207,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             const SizedBox(width: 6),
                             const Text(
-                              'Offline-Ready & Cloud Sync',
+                              'Cloud & Offline Sync',
                               style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.w600),
                             ),
                           ],
@@ -264,7 +220,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 20),
                   Center(
                     child: Container(
                       width: 80,
@@ -298,83 +254,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    _isRegistering ? 'Register your verified device account' : 'High-Security BLE Attendance System',
+                    _isRegistering ? 'Register your verified account' : 'High-Security BLE Attendance System',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.poppins(
                       fontSize: 13,
                       color: Colors.white60,
                     ),
                   ),
-                  const SizedBox(height: 28),
-
-                  // Quick 1-tap testing buttons
-                  if (!_isRegistering) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1E1E34),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.bolt, color: Colors.amberAccent, size: 18),
-                              SizedBox(width: 6),
-                              Text(
-                                'Instant 1-Tap Entry (Works Offline / Online)',
-                                style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: _isLoading ? null : () => _quickEnter('student'),
-                                  icon: const Icon(Icons.school, size: 16, color: Color(0xFF00D2FF)),
-                                  label: const Text('Student', style: TextStyle(color: Colors.white, fontSize: 13)),
-                                  style: OutlinedButton.styleFrom(
-                                    side: const BorderSide(color: Color(0xFF00D2FF)),
-                                    padding: const EdgeInsets.symmetric(vertical: 10),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: _isLoading ? null : () => _quickEnter('organiser'),
-                                  icon: const Icon(Icons.admin_panel_settings, size: 16, color: Color(0xFF6C63FF)),
-                                  label: const Text('Organiser', style: TextStyle(color: Colors.white, fontSize: 13)),
-                                  style: OutlinedButton.styleFrom(
-                                    side: const BorderSide(color: Color(0xFF6C63FF)),
-                                    padding: const EdgeInsets.symmetric(vertical: 10),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    const Row(
-                      children: [
-                        Expanded(child: Divider(color: Colors.white12)),
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 10),
-                          child: Text('OR CUSTOM LOGIN', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                        ),
-                        Expanded(child: Divider(color: Colors.white12)),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                  ],
+                  const SizedBox(height: 32),
 
                   if (_isRegistering) ...[
                     TextField(
@@ -473,12 +360,12 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
                           )
                         : Text(
-                            _isRegistering ? 'Create Verified Account' : 'Secure Login',
+                            _isRegistering ? 'Create Account' : 'Sign In',
                             style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600),
                           ),
                   ),
 
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 14),
 
                   TextButton(
                     onPressed: () {
@@ -489,7 +376,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Text(
                       _isRegistering
                           ? 'Already have an account? Sign In'
-                          : 'New student or organiser? Register here',
+                          : 'New here? Create Account (Student / Organiser)',
                       style: GoogleFonts.poppins(color: const Color(0xFF00D2FF), fontSize: 13),
                     ),
                   ),

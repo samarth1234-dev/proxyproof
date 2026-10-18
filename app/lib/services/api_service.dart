@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Primary online backend hosted on Render
+  // Primary online cloud backend
   static const String defaultUrl = 'https://proxyproof-backend.onrender.com';
   static bool isOfflineMode = false;
 
@@ -101,7 +101,7 @@ class ApiService {
       try {
         final uri = Uri.parse('$base$path');
         http.Response res;
-        const timeout = Duration(milliseconds: 2500);
+        const timeout = Duration(milliseconds: 3000);
         if (method == 'POST') {
           res = await http.post(uri, headers: headers, body: body).timeout(timeout);
         } else if (method == 'PUT') {
@@ -117,14 +117,14 @@ class ApiService {
           return res;
         }
       } catch (_) {
-        // Continue to next candidate
+        // Try next candidate
       }
     }
     isOfflineMode = true;
-    throw Exception('All network targets unreachable (Switching to Standalone Offline Mode)');
+    throw Exception('All network targets unreachable');
   }
 
-  // --- AUTHENTICATION (Cloud + Standalone Offline) ---
+  // --- AUTHENTICATION (Live Cloud + Persistent Offline Safety) ---
   Future<Map<String, dynamic>> register({
     required String username,
     required String password,
@@ -143,26 +143,22 @@ class ApiService {
           'role': role,
         }),
       );
-      return jsonDecode(response.body);
+      final data = jsonDecode(response.body);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        // Cache credentials locally for seamless offline continuation
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = 'cached_user_${username.toLowerCase().trim()}';
+        await prefs.setString(cacheKey, jsonEncode({
+          'username': username.trim(),
+          'password': password.trim(),
+          'fullName': fullName.trim(),
+          'role': role,
+          'userId': data['userId'] ?? 1,
+        }));
+      }
+      return data;
     } catch (_) {
-      // Offline fallback: save locally
-      isOfflineMode = true;
-      final prefs = await SharedPreferences.getInstance();
-      final usersRaw = prefs.getString('offline_registered_users') ?? '[]';
-      List<dynamic> users = jsonDecode(usersRaw);
-      users.add({
-        'username': username,
-        'password': password,
-        'fullName': fullName,
-        'role': role,
-        'id': users.length + 100,
-      });
-      await prefs.setString('offline_registered_users', jsonEncode(users));
-      return {
-        'message': 'Account created successfully in Offline Standalone Mode!',
-        'userId': users.length + 100,
-        'isOffline': true,
-      };
+      return {'error': 'Could not connect to live server. Please check internet connection or server status.'};
     }
   }
 
@@ -171,12 +167,15 @@ class ApiService {
     required String password,
     String? preferredRole,
   }) async {
+    final cleanUser = username.trim();
+    final cleanPass = password.trim();
+
     try {
       final response = await _sendWithFallback(
         '/auth/login',
         'POST',
         headers: await _headers(needsAuth: false),
-        body: jsonEncode({'username': username, 'password': password}),
+        body: jsonEncode({'username': cleanUser, 'password': cleanPass}),
       );
 
       final data = jsonDecode(response.body);
@@ -192,45 +191,66 @@ class ApiService {
           isOffline: false,
         );
         isOfflineMode = false;
+
+        // Cache user info locally for future offline sessions
+        final prefs = await SharedPreferences.getInstance();
+        final cacheKey = 'cached_user_${cleanUser.toLowerCase()}';
+        await prefs.setString(cacheKey, jsonEncode({
+          'username': cleanUser,
+          'password': cleanPass,
+          'fullName': data['fullName'],
+          'role': data['role'],
+          'userId': data['userId'],
+          'deviceId': data['deviceId'],
+        }));
+
         return data;
       } else if (response.statusCode == 401) {
-        return data;
+        return data; // Return invalid credentials error from live server
       }
     } catch (_) {
-      // Offline Fallback Login
+      // Live server unreachable - check if this user previously registered/logged in on this phone
     }
 
-    // Seamless offline authentication: user is never blocked
-    isOfflineMode = true;
-    final lowerUser = username.toLowerCase().trim();
-    String detectedRole = preferredRole ?? 'student';
-    if (lowerUser.contains('teach') || lowerUser.contains('prof') || lowerUser.contains('organ') || lowerUser.contains('admin')) {
-      detectedRole = 'organiser';
+    // Check local offline user cache on phone
+    final prefs = await SharedPreferences.getInstance();
+    final cacheKey = 'cached_user_${cleanUser.toLowerCase()}';
+    final cachedRaw = prefs.getString(cacheKey);
+
+    if (cachedRaw != null) {
+      try {
+        final cached = jsonDecode(cachedRaw);
+        if (cached['password'] == cleanPass) {
+          isOfflineMode = true;
+          final offlineToken = 'offline_token_${DateTime.now().millisecondsSinceEpoch}';
+          await saveAuthData(
+            token: offlineToken,
+            role: cached['role'] ?? 'student',
+            userId: cached['userId'] ?? 1,
+            username: cached['username'],
+            fullName: cached['fullName'],
+            deviceId: cached['deviceId'] ?? 'device_offline',
+            isApproved: true,
+            isOffline: true,
+          );
+          return {
+            'token': offlineToken,
+            'userId': cached['userId'] ?? 1,
+            'username': cached['username'],
+            'fullName': cached['fullName'],
+            'role': cached['role'] ?? 'student',
+            'deviceId': cached['deviceId'],
+            'isApproved': true,
+            'isOffline': true,
+          };
+        } else {
+          return {'error': 'Invalid password for cached user.'};
+        }
+      } catch (_) {}
     }
-
-    final offlineToken = 'offline_token_${DateTime.now().millisecondsSinceEpoch}';
-    final offlineUserId = 99;
-
-    await saveAuthData(
-      token: offlineToken,
-      role: detectedRole,
-      userId: offlineUserId,
-      username: username.trim().isEmpty ? (detectedRole == 'organiser' ? 'Prof. Faculty' : 'Student') : username.trim(),
-      fullName: username.trim().isEmpty ? (detectedRole == 'organiser' ? 'Faculty Organiser' : 'Student User') : username.trim(),
-      deviceId: 'local_device',
-      isApproved: true,
-      isOffline: true,
-    );
 
     return {
-      'token': offlineToken,
-      'userId': offlineUserId,
-      'username': username.trim().isEmpty ? 'Student' : username.trim(),
-      'fullName': username.trim().isEmpty ? 'Student User' : username.trim(),
-      'role': detectedRole,
-      'deviceId': 'local_device',
-      'isApproved': true,
-      'isOffline': true,
+      'error': 'Cannot reach server. Please ensure internet is active to log in for the first time.'
     };
   }
 
@@ -265,7 +285,7 @@ class ApiService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('bound_device_id', deviceId);
       return {
-        'message': 'Primary device bound locally (Offline Mode)',
+        'message': 'Primary device registered locally (Offline Mode)',
         'deviceId': deviceId,
         'isApproved': true,
       };
@@ -298,7 +318,7 @@ class ApiService {
       );
       return jsonDecode(response.body);
     } catch (_) {
-      return {'message': 'Device approved locally (Offline Mode)'};
+      return {'message': 'Device approval recorded locally'};
     }
   }
 
@@ -319,7 +339,6 @@ class ApiService {
         body: jsonEncode({'title': title, 'durationMinutes': durationMinutes}),
       );
       final data = jsonDecode(response.body);
-      // Cache active session locally as well
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('offline_active_session', jsonEncode(data));
       return data;
@@ -406,7 +425,6 @@ class ApiService {
       }
       return data;
     } catch (_) {
-      // Check local offline session
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('offline_active_session');
       if (raw != null) {
@@ -457,7 +475,6 @@ class ApiService {
       );
       return jsonDecode(response.body);
     } catch (_) {
-      // Offline fallback attendance recording
       isOfflineMode = true;
       final prefs = await SharedPreferences.getInstance();
       final user = await getCurrentUser();
@@ -467,7 +484,6 @@ class ApiService {
       final recordsRaw = prefs.getString('offline_attendance_records') ?? '[]';
       List<dynamic> records = jsonDecode(recordsRaw);
 
-      // Check if already marked for this session
       final already = records.any((r) => r['sessionId'] == sessionId && r['username'] == username);
       if (already) {
         return {
@@ -483,7 +499,7 @@ class ApiService {
         'attendanceId': records.length + 1,
         'sessionId': sessionId,
         'studentId': {
-          'id': user?['id'] ?? 101,
+          'id': user?['id'] ?? 1,
           'username': username,
           'fullName': fullName,
         },
@@ -493,14 +509,14 @@ class ApiService {
         'time': formattedTime,
         'rssi': rssi,
         'deviceId': deviceId,
-        'status': 'Present (Standalone Verified)',
+        'status': 'Present (Local Recorded)',
       });
 
       await prefs.setString('offline_attendance_records', jsonEncode(records));
 
       return {
         'success': true,
-        'message': 'Attendance successfully verified & marked (Standalone Mode)!',
+        'message': 'Attendance successfully verified & marked!',
         'username': username,
         'rssi': rssi,
         'time': formattedTime,
@@ -569,7 +585,7 @@ class ApiService {
         'status': 'Manual',
       });
       await prefs.setString('offline_attendance_records', jsonEncode(records));
-      return {'message': 'Student added successfully (Offline Mode)'};
+      return {'message': 'Student added successfully'};
     }
   }
 
@@ -624,18 +640,10 @@ class ApiService {
         } catch (_) {}
       }
       return {
-        'totalSessions': 1,
-        'attendedSessions': 1,
-        'percentage': 100.0,
-        'records': [
-          {
-            'sessionId': 101,
-            'sessionTitle': 'Computer Networks - Lec 7',
-            'timestamp': DateTime.now().toIso8601String(),
-            'rssi': -62,
-            'status': 'Present',
-          }
-        ]
+        'totalSessions': 0,
+        'attendedSessions': 0,
+        'percentage': 0.0,
+        'records': []
       };
     }
   }
@@ -654,10 +662,7 @@ class ApiService {
       );
       return jsonDecode(response.body);
     } catch (_) {
-      return [
-        {'id': 1, 'username': 'samarth', 'fullName': 'Samarth Singh'},
-        {'id': 2, 'username': 'student', 'fullName': 'Rahul Sharma'},
-      ];
+      return [];
     }
   }
 }

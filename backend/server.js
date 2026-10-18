@@ -36,62 +36,6 @@ function saveDb() {
   }
 }
 
-async function seedDefaultUsers() {
-  if (!db.users || db.users.length === 0) {
-    const defaultPasswordHash = await bcrypt.hash('password123', 10);
-    db.users = [
-      {
-        id: 1,
-        username: 'samarth',
-        fullName: 'Samarth Singh',
-        password: defaultPasswordHash,
-        role: 'student',
-        deviceId: null,
-        deviceModel: 'Student Phone',
-        isApproved: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 2,
-        username: 'student',
-        fullName: 'Rahul Sharma',
-        password: defaultPasswordHash,
-        role: 'student',
-        deviceId: null,
-        deviceModel: 'OnePlus 11',
-        isApproved: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 3,
-        username: 'teacher',
-        fullName: 'Dr. V. Sharma (Professor)',
-        password: defaultPasswordHash,
-        role: 'organiser',
-        deviceId: null,
-        deviceModel: 'Faculty Laptop',
-        isApproved: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 4,
-        username: 'admin',
-        fullName: 'Admin Organiser',
-        password: defaultPasswordHash,
-        role: 'organiser',
-        deviceId: null,
-        deviceModel: 'Admin Terminal',
-        isApproved: true,
-        createdAt: new Date().toISOString()
-      }
-    ];
-    saveDb();
-    console.log('Seeded initial demo accounts into ProxyProof database.');
-  }
-}
-seedDefaultUsers();
-
-
 function authMiddleware(req, res, next) {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Unauthorized: No token provided' });
