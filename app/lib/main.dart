@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'screens/login_screen.dart';
 import 'screens/organiser_screen.dart';
 import 'screens/student_screen.dart';
+import 'screens/admin_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,6 +42,7 @@ class ProxyProofApp extends StatelessWidget {
         '/': (context) => const LoginScreen(),
         '/organiser': (context) => const OrganiserScreen(),
         '/student': (context) => const StudentScreen(),
+        '/admin': (context) => const AdminScreen(),
       },
     );
   }

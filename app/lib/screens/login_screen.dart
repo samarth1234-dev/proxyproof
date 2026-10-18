@@ -32,7 +32,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final role = user['role'] ?? 'student';
       Navigator.pushReplacementNamed(
         context,
-        role == 'organiser' ? '/organiser' : '/student',
+        role == 'admin' ? '/admin' : (role == 'organiser' ? '/organiser' : '/student'),
       );
     }
   }
@@ -169,7 +169,7 @@ class _LoginScreenState extends State<LoginScreen> {
           if (mounted) {
             Navigator.pushReplacementNamed(
               context,
-              role == 'organiser' ? '/organiser' : '/student',
+              role == 'admin' ? '/admin' : (role == 'organiser' ? '/organiser' : '/student'),
             );
           }
         }

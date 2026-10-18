@@ -891,4 +891,77 @@ class ApiService {
       return [];
     }
   }
+
+  // ================= ADMIN MANAGEMENT APIS =================
+
+  Future<Map<String, dynamic>> getAdminStats() async {
+    try {
+      final response = await _sendWithFallback(
+        '/admin/stats',
+        'GET',
+        headers: await _headers(needsAuth: true),
+      );
+      return jsonDecode(response.body);
+    } catch (e) {
+      return {
+        'totalStudents': 0,
+        'totalOrganisers': 0,
+        'totalSessions': 0,
+        'totalAttendance': 0,
+        'pendingApprovals': 0,
+      };
+    }
+  }
+
+  Future<List<dynamic>> getAdminUsers({String? query, String? role}) async {
+    try {
+      String endpoint = '/admin/users?';
+      if (query != null && query.isNotEmpty) {
+        endpoint += 'q=${Uri.encodeComponent(query)}&';
+      }
+      if (role != null && role.isNotEmpty) {
+        endpoint += 'role=${Uri.encodeComponent(role)}&';
+      }
+      final response = await _sendWithFallback(
+        endpoint,
+        'GET',
+        headers: await _headers(needsAuth: true),
+      );
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> adminResetPassword(int userId, String newPassword) async {
+    final response = await _sendWithFallback(
+      '/admin/users/$userId/reset-password',
+      'POST',
+      headers: await _headers(needsAuth: true),
+      body: jsonEncode({'newPassword': newPassword}),
+    );
+    return jsonDecode(response.body);
+  }
+
+  Future<Map<String, dynamic>> adminResetDevice(int userId) async {
+    final response = await _sendWithFallback(
+      '/admin/users/$userId/reset-device',
+      'POST',
+      headers: await _headers(needsAuth: true),
+    );
+    return jsonDecode(response.body);
+  }
+
+  Future<Map<String, dynamic>> adminDeleteUser(int userId) async {
+    final response = await _sendWithFallback(
+      '/admin/users/$userId',
+      'DELETE',
+      headers: await _headers(needsAuth: true),
+    );
+    return jsonDecode(response.body);
+  }
 }
+
